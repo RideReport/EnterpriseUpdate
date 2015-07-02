@@ -1,0 +1,74 @@
+#!/usr/bin/env ruby
+require 'rubygems'
+require 'aws/s3'
+# require 'Tempfile'
+
+appname = "Yourapp.ipa"
+bucketname = "youramazonbucketname"
+
+GET_LINK_ONLY_ARG = ARGV.shift
+upload_build = true
+if (GET_LINK_ONLY_ARG == "-l")
+  upload_build = false
+elsif (GET_LINK_ONLY_ARG)
+  raise("Usage: upload-iphone [-l]")
+end
+
+
+#get current version number
+if (upload_build)
+  raise "No build present!" unless File.exists?(appname)
+end
+
+AWS::S3::DEFAULT_HOST.replace "s3-us-west-2.amazonaws.com"
+
+AWS::S3::Base.establish_connection!(
+  :access_key_id     => 'YOUR_ACCESS_KEY_ID',
+  :secret_access_key => 'YOUR_SECRET_ACCESS_KEY'
+)
+
+puts AWS::S3::Bucket.find(bucketname)
+
+def upload(path, dest_path, bucket, access)
+  raise "File does not exist: #{path}" unless File.exists?(path)
+  puts "Uploading #{File.basename(path)} to S3 bucket #{bucket} as #{dest_path}"
+  AWS::S3::S3Object.store(
+    dest_path,
+    File.open(path),
+    bucket,
+    :access => access
+  )
+end
+
+if (upload_build)
+  upload(appname, appname, bucketname, "private")
+end
+
+url = AWS::S3::S3Object.url_for(appname,
+                 bucketname,
+                 :use_ssl => true,
+                 :expires_in => 60 * 60 * 24 * 30)
+puts url
+`cp #{appname} app.zip`
+`unzip app.zip -d App`
+current_version = `/usr/libexec/PlistBuddy -c "print CFBundleVersion" App/Payload/#{appname}/Info.plist`.strip
+`rm -r app`
+`rm app.zip`
+
+`/usr/libexec/PlistBuddy -c "Set items:0:metadata:bundle-version #{current_version}" "manifest.plist"`
+`/usr/libexec/PlistBuddy -c "Set items:0:assets:0:url #{url}" "manifest.plist"`
+upload("manifest.plist", "manifest.plist", bucketname, "public_read")
+
+url = AWS::S3::S3Object.url_for('manifest.plist',
+                 bucketname,
+                 :use_ssl => true,
+                 :authenticated => false)
+
+# reset plist URL
+`/usr/libexec/PlistBuddy -c "Set items:0:metadata:bundle-version IPA_VERSION" "manifest.plist"`
+`/usr/libexec/PlistBuddy -c "Set items:0:assets:0:url IPA_URL" "manifest.plist"`
+puts "itms-services://?action=download-manifest&url=#{CGI.escape(url)}"
+
+if (upload_build)
+  `rm -r #{appname}`
+end
